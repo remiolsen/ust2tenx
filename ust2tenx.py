@@ -52,8 +52,11 @@ def write_read1(ustmap, tenx, read, prefix, procs, tenx_kit):
                         ust_bc = tenx[ustmap[tarr[0]]]
                     except KeyError:
                         ust_bc = r1_nbc
-                        #print("No barcode in file {} in read {}, inserting Ns".format(read, title), file=sys.stderr)
+                        #print("No barcode in file {} in read {}, inserting Ns".format(read, tarr[0]), file=sys.stderr)
+                        pass
                     except IndexError:
+                        ust_bc = r1_nbc
+                        #print("No barcode in file {} in read {}, inserting Ns".format(read, tarr[0]), file=sys.stderr)
                         pass
 
                     outln = "@{} 1:N:0:{}\n".format(tarr[0], next(idx_loop))
@@ -99,71 +102,6 @@ def write_i1(ustmap, tenx, read, prefix, procs, tenx_kit):
 ### END DRY-principle violating code-block
 
 
-### Don't repeat myself? Hold my beer!
-def write_read1p(ustmap, ustreads, tenx, read, prefix, procs, tenx_kit):
-    idx_loop = cycle(ilmnbc[tenx_kit])
-    p_split = str(int(int(procs) / 2))
-    with subprocess.Popen(["pigz", "-d", "-c", "-p", p_split, read],
-            stdout=subprocess.PIPE, bufsize=gz_buf) as fzi:
-        fi = io.TextIOWrapper(fzi.stdout, write_through=True)
-        with open(prefix+"R1_001.fastq.gz", 'wb') as ofile:
-            with subprocess.Popen(["pigz", "-c", "-p", p_split],
-                    stdin=subprocess.PIPE, stdout=ofile, bufsize=gz_buf, close_fds=False) as oz:
-                for title, seq, qual in FastqGeneralIterator(fi):
-                    tarr = WFA.get().split(title)
-                    try:
-                        ust_bc = tenx[ustmap[tarr[1]]]
-                    except KeyError:
-                        ust_bc = r1_nbc
-                        #print("No barcode in file {} in read {}, inserting Ns".format(read, title), file=sys.stderr)
-                    except IndexError:
-                        ust_bc = r1_nbc
-
-                    if tarr[0] in ustreads.keys():
-                        outln = "@{} 1:N:0:{}\n".format(tarr[0], next(idx_loop))
-                        outln += "{}{}{}\n".format(ust_bc, oligo, seq)
-                        outln += "+\n"
-                        outln += "{}{}\n".format(r1_qual, qual)
-                        oz.stdin.write(outln.encode('utf-8'))
-
-def write_read2p(ustmap, ustreads, tenx, read, prefix, procs, tenx_kit):
-    idx_loop = cycle(ilmnbc[tenx_kit])
-    p_split = str(int(int(procs) / 2))
-    with subprocess.Popen(["pigz", "-d", "-c", "-p", p_split, read],
-            stdout=subprocess.PIPE, bufsize=gz_buf) as fzi:
-        fi = io.TextIOWrapper(fzi.stdout, write_through=True)
-        with open(prefix+"R2_001.fastq.gz", 'wb') as ofile:
-            with subprocess.Popen(["pigz", "-c", "-p", p_split],
-                    stdin=subprocess.PIPE, stdout=ofile, bufsize=gz_buf, close_fds=False) as oz:
-                for title, seq, qual in FastqGeneralIterator(fi):
-                    tarr = WFA.get().split(title)
-                    if tarr[0] in ustreads.keys() or tarr[0][:-2]+"/1" in ustreads.keys():
-                        outln = "@{} 2:N:0:{}\n".format(tarr[0], next(idx_loop))
-                        outln += "{}\n".format(seq)
-                        outln += "+\n"
-                        outln += "{}\n".format(qual)
-                        oz.stdin.write(outln.encode('utf-8'))
-
-def write_i1p(ustmap, ustreads, tenx, read, prefix, procs, tenx_kit):
-    idx_loop = cycle(ilmnbc[tenx_kit])
-    p_split = str(int(int(procs) / 2))
-    with subprocess.Popen(["pigz", "-d", "-c", "-p", p_split, read],
-            stdout=subprocess.PIPE, bufsize=gz_buf) as fzi:
-        fi = io.TextIOWrapper(fzi.stdout, write_through=True)
-        with open(prefix+"I1_001.fastq.gz", 'wb') as ofile:
-            with subprocess.Popen(["pigz", "-c", "-p", p_split],
-                    stdin=subprocess.PIPE, stdout=ofile, bufsize=gz_buf, close_fds=False) as oz:
-                for title, seq, qual in FastqGeneralIterator(fi):
-                    tarr = WFA.get().split(title)
-                    if tarr[0] in ustreads.keys():
-                        idx_i = next(idx_loop)
-                        outln = "@{} 1:N:0:{}\n".format(tarr[0], idx_i)
-                        outln += "{}\n".format(idx_i)
-                        outln += "+\n"
-                        outln += "{}\n".format(i1_qual)
-                        oz.stdin.write(outln.encode('utf-8'))
-### END DRY-principle violating code-block
-
 def main(tenxfile, r1, r2, i1, prefix, total_processes, minbc, tenx_kit, max_bc_split):
     idx = 0
     tenx_c = 0
@@ -189,64 +127,23 @@ def main(tenxfile, r1, r2, i1, prefix, total_processes, minbc, tenx_kit, max_bc_
             for title, seq, _ in FastqGeneralIterator(f):
                 rname = title.split()[0]
                 if len(seq) == 18:
-                    #ustmap_c[seq] = ustmap_c.get(seq, 0) + 1
-                    to_map = ustmap_r.get(rname, [])
+                    to_map = ustmap_r.get(seq, [])
                     to_map.append(rname)
                     ustmap_r[seq] = to_map
 
-    nrbc = len(ustmap_c)
-    if max_bc_split > 0:
-        # TOOD: Fix splitting -- it should not work as it is now
-        chl = []
-        remainder = []
-        # split out ust-10x bc pairs into chunks determined by max_mc_split. Keep unbarcoded as remainer
-        for key, count in ustmap_c.items():
-            if count >= minbc:
-                chl.append((key, count))
-            else:
-                remainder.append((key, count))
+    for seq, reads in ustmap_r.items():
+        count = len(reads)
+        assert idx <= tenx_c, "Found more barcodes that available for 10X ({}), try using --min-bc argument".format(tenx_c)
+        if count >= minbc:
+            for read in reads:
+                ustmap[read] = idx
+            idx += 1
 
-        chunks = [chl[x:x+max_bc_split] for x in range(0, len(chl), max_bc_split)]
-        # create ustmap dict for writing new read triplets. Add discarded remainers to the first chunk
-        for ic, chunk in enumerate(chunks):
-            idx = 0
-            ustmap = {}; readmap = {}
-            for key, count in chunk:
-                ustmap[key] = idx
-                idx += 1
-                readmap[key] = ustmap_r[key]
-            ustmaps.append(ustmap)
-            ustreads.append(readmap)
-        ustreads[0]["nobc"] = []
-        for key, count in remainder:
-            istreads[0]["nobc"].extend(ustmap_r[key])
-    else:
-        for seq, reads in ustmap_r.items():
-            count = len(reads)
-            assert idx <= tenx_c, "Found more barcodes that available for 10X ({}), try using --min-bc argument".format(tenx_c)
-            if count >= minbc:
-                for read in reads:
-                    ustmap[read] = idx
-                idx += 1
-
-    if max_bc_split > 0:
-        print("Found:\t{} UST barcodes".format(len(ustmap_r.keys())))
-        print("Will make {} 10X libraries".format(len(ustmaps)))
-        for i, ustmap in enumerate(ustmaps):
-            treads = [i for su,sl in ustreads[i].items() for i in sl]
-            reads = {i: 0 for i in treads}
-            cprefix = "{}_{}".format(str(i+1).zfill(3),prefix)
-            print("part {}:\t{} 10X barcodes,\t{} reads".format(i+1, len(ustmaps[i]), len(treads)))
-            #write_read1p(ustmaps[i], reads, TENX_BC, r1, cprefix, total_processes, tenx_kit)
-            #write_read2p(ustmaps[i], reads, TENX_BC, r2, cprefix, total_processes, tenx_kit)
-            #write_i1p(ustmaps[i], reads, TENX_BC, r1, cprefix, total_processes, tenx_kit)
-
-    else:
-        print("Found:\t{} UST barcodes".format(len(ustmap_r.keys())))
-        print("Made:\t{} 10X barcodes".format(idx))
-        write_read1(ustmap, TENX_BC, r1, prefix, total_processes, tenx_kit)
-        write_read2(ustmap, TENX_BC, r2, prefix, total_processes, tenx_kit)
-        write_i1(ustmap, TENX_BC, r1, prefix, total_processes, tenx_kit)
+    print("Found:\t{} UST barcodes".format(len(ustmap_r.keys())))
+    print("Made:\t{} 10X barcodes".format(idx))
+    write_read1(ustmap, TENX_BC, r1, prefix, total_processes, tenx_kit)
+    write_read2(ustmap, TENX_BC, r2, prefix, total_processes, tenx_kit)
+    write_i1(ustmap, TENX_BC, r1, prefix, total_processes, tenx_kit)
 
 
 if __name__ == "__main__":
